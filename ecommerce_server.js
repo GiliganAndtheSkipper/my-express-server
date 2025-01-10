@@ -45,6 +45,15 @@ const authenticateToken = (req, res, next) => {
     }
 };
 
+// Admin Authorization Middleware
+const authenticateAdmin = (req, res, next) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied. Admins only.' });
+    }
+    next();
+};
+
+
 /**
  * @swagger
  * /test-db:
@@ -204,9 +213,26 @@ app.delete('/products/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// User Registration Route
+// Admin-Only Product Creation Route
+app.post('/admin/products', authenticateToken, authenticateAdmin, async (req, res) => {
+    const { name, description, price, stock, category_id } = req.body;
+    try {
+        const result = await pool.query(
+            `INSERT INTO products (name, description, price, stock, category_id) 
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [name, description, price, stock, category_id]
+        );
+        res.status(201).json({ message: 'Product added successfully by Admin!', product: result.rows[0] });
+    } catch (err) {
+        res.status(500).send('Error adding product.');
+    }
+});
+
+
+// User Registration Route (Updated to Support Roles)
 app.post('/register', async (req, res) => {
-    const { name, email, password, address, phone_number } = req.body;
+    const { name, email, password, address, phone_number, role = 'user' } = req.body; 
+    
     if (!name || !email || !password) {
         return res.status(400).json({ error: 'Name, email, and password are required.' });
     }
@@ -219,10 +245,11 @@ app.post('/register', async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(password, 10);
         const result = await pool.query(
-            `INSERT INTO users (name, email, password, address, phone_number) 
-             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-            [name, email, hashedPassword, address, phone_number]
+            `INSERT INTO users (name, email, password, address, phone_number, role) 
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [name, email, hashedPassword, address, phone_number, role]
         );
+
         res.status(201).json({ message: 'User registered successfully!', user: result.rows[0] });
     } catch (err) {
         res.status(500).json({ error: 'Error registering user.' });
@@ -257,35 +284,37 @@ app.post('/register', async (req, res) => {
  *         description: Error during login
  */
 
-// User Login Route
+// User Login Route (Updated to Include Role)
 app.post('/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
-        return res.status(400).json({ error: 'Email and password are required.' });
+        return res.status(400).send('Email and password are required.');
     }
 
     try {
         const user = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         if (user.rows.length === 0) {
-            return res.status(401).json({ error: 'Invalid credentials.' });
+            return res.status(401).send('Invalid credentials.');
         }
 
         const isValidPassword = await bcrypt.compare(password, user.rows[0].password);
         if (!isValidPassword) {
-            return res.status(401).json({ error: 'Invalid credentials.' });
+            return res.status(401).send('Invalid credentials.');
         }
 
+        // Include role in the JWT token
         const token = jwt.sign(
-            { user_id: user.rows[0].user_id, email: user.rows[0].email },
+            { user_id: user.rows[0].user_id, email: user.rows[0].email, role: user.rows[0].role },
             SECRET_KEY,
             { expiresIn: '1h' }
         );
 
         res.json({ message: 'Login successful!', token });
     } catch (err) {
-        res.status(500).json({ error: 'Error logging in.' });
+        res.status(500).send('Error logging in.');
     }
 });
+
 
 /**
  * @swagger
